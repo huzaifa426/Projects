@@ -1,0 +1,62 @@
+# ============================================================
+#  QuestAITrainer — repo ignore rules (Unity + Node + tooling)
+# ============================================================
+
+# ---------- Unity (QuestAITrainer) ----------
+QuestAITrainer/[Ll]ibrary/
+QuestAITrainer/[Tt]emp/
+QuestAITrainer/[Oo]bj/
+QuestAITrainer/[Bb]uild/
+QuestAITrainer/[Bb]uilds/
+QuestAITrainer/[Ll]ogs/
+QuestAITrainer/[Uu]ser[Ss]ettings/
+QuestAITrainer/[Mm]emoryCaptures/
+QuestAITrainer/[Rr]ecordings/
+QuestAITrainer/.vs/
+QuestAITrainer/.vsconfig
+QuestAITrainer/.gradle/
+
+# Unity-generated project/solution files (regenerated on open)
+QuestAITrainer/*.csproj
+QuestAITrainer/*.sln
+QuestAITrainer/*.unityproj
+QuestAITrainer/*.suo
+QuestAITrainer/*.user
+QuestAITrainer/*.userprefs
+QuestAITrainer/UpgradeLog*.htm
+
+# Unity crash / burst debug artifacts
+QuestAITrainer/sysinfo.txt
+QuestAITrainer/crashlytics-build.properties
+**/*_BurstDebugInformation_DoNotShip/
+
+# Asset meta files for ignored folders are also ignored automatically by Unity;
+# but keep .meta files for tracked assets (do NOT ignore *.meta globally).
+
+# ---------- Node (quest-ai-server) ----------
+node_modules/
+quest-ai-server/node_modules/
+quest-ai-server/uploads/*
+!quest-ai-server/uploads/.gitkeep
+npm-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+
+# ---------- Third-party dependency (cloned separately, see README) ----------
+whisper.cpp/
+
+# ---------- Build outputs / large binaries ----------
+*.apk
+*.aab
+*.wav
+*.onnx
+*.bin
+
+# ---------- OS / editor cruft ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/

@@ -72,6 +72,16 @@ app.get("/test", (req, res) => {
   res.json({ message: "Backend is working!" });
 });
 
+// Reset conversation memory (call before a fresh demo)
+app.post("/reset", (req, res) => {
+  for (const key of Object.keys(conversationHistory)) {
+    conversationHistory[key] = [];
+  }
+  classroomQuizMode = false;
+  console.log("🔄 Conversation history + quiz mode reset");
+  res.json({ message: "Conversation history cleared" });
+});
+
 // Main AI endpoint
 app.post("/upload", upload.single("audio"), async (req, res) => {
   let convertedFilePath = null;
@@ -148,13 +158,14 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     // 2. GENERATE AI RESPONSE WITH OLLAMA
     console.log("\n🤖 Step 2: Generating AI response...");
     
+    updateQuizMode(env, transcription);
     const systemPrompt = getSystemPrompt(env);
-    
+
     let ollamaResp;
     try {
       ollamaResp = await axios.post("http://localhost:11434/api/generate", {
         model: "llama3",
-        prompt: `SYSTEM:\n${systemPrompt}\n\nUSER:\n${transcription}\n\nASSISTANT:\n`,
+        prompt: buildConversationPrompt(env, systemPrompt, transcription),
         stream: false
       });
     } catch (error) {
@@ -162,7 +173,22 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
       throw new Error("Ollama generation failed. Make sure 'ollama serve' is running.");
     }
 
-    const aiText = ollamaResp.data.response.trim();
+    let aiText = ollamaResp.data.response.trim();
+
+    // Quiz scoring: detect and strip the [CORRECT]/[INCORRECT] markers
+    // (stripped BEFORE TTS so Piper doesn't read them aloud)
+    let quizResult = "";
+    if (aiText.includes("[CORRECT]")) {
+      quizResult = "correct";
+    } else if (aiText.includes("[INCORRECT]")) {
+      quizResult = "incorrect";
+    }
+    aiText = aiText.replace(/\[CORRECT\]/g, "").replace(/\[INCORRECT\]/g, "").trim();
+
+    // Remember this exchange so the AI keeps quiz/interview context
+    rememberTurn(env, transcription, (quizResult ? `[${quizResult.toUpperCase()}] ` : "") + aiText);
+
+    if (quizResult) console.log("🎯 Quiz result:", quizResult);
     console.log("💬 AI Response:", aiText.substring(0, 100) + (aiText.length > 100 ? "..." : ""));
 
     // 3. CONVERT TO SPEECH WITH PIPER
@@ -189,10 +215,11 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     console.log("✅ Request completed successfully!");
     console.log("=".repeat(50) + "\n");
 
-    res.json({ 
-      text: aiText, 
+    res.json({
+      text: aiText,
       audio_base64: audioBase64,
-      transcription: transcription
+      transcription: transcription,
+      quizResult: quizResult
     });
 
   } catch (err) {
@@ -227,52 +254,100 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
 // AI PROMPTS FOR DIFFERENT ENVIRONMENTS
 // ========================================
 
+const SYSTEM_PROMPTS = {
+  // Classroom has two modes: tutor (default) and quiz (user says "start quiz").
+  classroomTutor: `You are Professor Claude, a friendly software engineering teacher in a virtual classroom.
+Your role:
+- Answer the student's software engineering questions clearly and accurately
+  (programming, OOP, data structures, algorithms, databases, testing, agile, web development, software design)
+- If the question is not about software engineering, answer briefly then steer back to software engineering
+- Do NOT quiz the student or ask them questions unless they ask for a quiz
+- If they mention wanting a quiz or test, tell them: say "start quiz" to begin
+- Keep responses under 50 words
+- Be clear and encouraging`,
+
+  classroomQuiz: `You are Professor Claude, a software engineering teacher running a quiz in a virtual classroom.
+Strict rules:
+- Ask ONE software engineering quiz question at a time (programming concepts, OOP, data structures,
+  algorithms, databases, testing, agile, web development). NEVER general knowledge.
+- When the student answers your question: if CORRECT start your response with "[CORRECT]",
+  if wrong start with "[INCORRECT]". Then give one line of feedback and ask the next question.
+- If the student just asked to start the quiz, greet briefly and ask the first question (no marker).
+- If the student asks a question instead of answering, answer it briefly, then repeat your quiz question.
+- Keep responses under 40 words.
+Example: "[CORRECT] Right! A stack is LIFO. Next question: what does SQL stand for?"`,
+
+  gym: `You are Coach Max, an energetic personal trainer in a virtual gym.
+Strict rules:
+- ONLY discuss fitness: workouts, exercises, muscle groups, form, sets and reps, stretching, basic nutrition, motivation
+- When asked what to train or how to train a specific muscle (like "what should I do for back today"),
+  give 3-4 specific exercises WITH sets and reps (example: "Deadlifts 3x8, Lat pulldowns 3x12...")
+- Answer every exercise and fitness question directly and practically
+- If asked about anything not fitness related, redirect to training in one short line
+- Keep responses under 50 words
+- Be high-energy like a real personal trainer`,
+
+  office: `You are Ms. Taylor, a professional HR interviewer conducting a mock job interview in an office.
+Strict rules:
+- Ask ONE classic HR/behavioral interview question at a time (tell me about yourself, strengths,
+  weaknesses, teamwork, handling conflict, career goals, why should we hire you, describe a challenge you overcame)
+- ONLY HR/behavioral questions - never technical questions, never general knowledge
+- After the candidate answers, give one line of constructive feedback on their answer, then ask the next HR question
+- If the candidate greets you, welcome them warmly and ask the first question
+- Keep responses under 50 words
+- Be professional and friendly`
+};
+
+// ========================================
+// QUIZ MODE (classroom only, keyword-switched)
+// ========================================
+// Deterministic server-side state: the LLM never decides when quiz
+// mode starts/stops - the user's spoken command does.
+let classroomQuizMode = false;
+
+function updateQuizMode(env, transcription) {
+  if (env !== "classroom") return;
+  const t = transcription.toLowerCase();
+  if (/\b(start|begin)\s+(the\s+)?quiz\b/.test(t) || /\bquiz\s+me\b/.test(t)) {
+    classroomQuizMode = true;
+    console.log("📝 Quiz mode: ON");
+  } else if (/\b(stop|end|exit|finish)\s+(the\s+)?quiz\b/.test(t)) {
+    classroomQuizMode = false;
+    console.log("📝 Quiz mode: OFF");
+  }
+}
+
 function getSystemPrompt(env) {
-  const prompts = {
-    classroom: `You are a friendly and encouraging teacher AI named Professor Claude.
+  if (env === "classroom") {
+    return classroomQuizMode ? SYSTEM_PROMPTS.classroomQuiz : SYSTEM_PROMPTS.classroomTutor;
+  }
+  return SYSTEM_PROMPTS[env] || SYSTEM_PROMPTS.classroomTutor;
+}
 
-Your role:
-- Ask educational quiz questions appropriate for the student
-- Give constructive and positive feedback
-- Encourage learning and curiosity
-- Explain concepts clearly
-- Keep responses under 40 words
-- Be supportive, patient, and enthusiastic
+// ========================================
+// CONVERSATION MEMORY (per environment)
+// ========================================
+// Keeps the last few exchanges so the classroom AI remembers
+// which quiz question it asked when judging the answer.
+const conversationHistory = { classroom: [], gym: [], office: [] };
+const MAX_HISTORY_TURNS = 6; // user+assistant pairs kept
 
-Example responses:
-"Great job! You got it right. Here's your next question: What is the capital of France?"
-"Not quite, but that's close! Let me give you a hint..."`,
-    
-    gym: `You are an energetic and motivating fitness trainer AI named Coach Max.
+function buildConversationPrompt(env, systemPrompt, userMessage) {
+  const history = conversationHistory[env] || [];
+  let prompt = `SYSTEM:\n${systemPrompt}\n\n`;
+  for (const turn of history) {
+    prompt += `USER:\n${turn.user}\n\nASSISTANT:\n${turn.assistant}\n\n`;
+  }
+  prompt += `USER:\n${userMessage}\n\nASSISTANT:\n`;
+  return prompt;
+}
 
-Your role:
-- Guide workout exercises with clear instructions
-- Count repetitions and provide encouragement
-- Give form corrections when needed
-- Motivate the user with enthusiasm
-- Keep responses under 30 words
-- Use energetic language
-
-Example responses:
-"Perfect form! Five more reps, you got this!"
-"Let's crush this workout! Starting with 10 jumping jacks. Ready? Go!"`,
-    
-    office: `You are a professional HR interviewer AI named Ms. Johnson.
-
-Your role:
-- Ask behavioral interview questions
-- Listen to responses and provide constructive feedback
-- Be professional yet friendly and approachable
-- Help candidates improve their interview skills
-- Keep responses under 40 words
-- Stay focused on professional development
-
-Example responses:
-"Good answer! Can you tell me about a time you handled a difficult team member?"
-"I appreciate that example. Let's explore your leadership experience next."`
-  };
-  
-  return prompts[env] || prompts.classroom;
+function rememberTurn(env, user, assistant) {
+  if (!conversationHistory[env]) conversationHistory[env] = [];
+  conversationHistory[env].push({ user, assistant });
+  while (conversationHistory[env].length > MAX_HISTORY_TURNS) {
+    conversationHistory[env].shift();
+  }
 }
 
 // ========================================
@@ -280,7 +355,7 @@ Example responses:
 // ========================================
 
 const PORT = 3000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log("\n" + "=".repeat(60));
   console.log("🚀 QUEST AI SERVER STARTED");
   console.log("=".repeat(60));

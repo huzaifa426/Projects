@@ -1,0 +1,22 @@
+# Normalize line endings — avoids CRLF/LF churn across machines
+* text=auto
+
+# Unity YAML assets: treat as text, ensure LF, and use Unity's merge where possible
+*.cs      text diff=csharp
+*.shader  text
+*.cginc   text
+*.unity   text merge=unityyamlmerge eol=lf
+*.prefab  text merge=unityyamlmerge eol=lf
+*.asset   text merge=unityyamlmerge eol=lf
+*.mat     text merge=unityyamlmerge eol=lf
+*.meta    text merge=unityyamlmerge eol=lf
+
+# Binary assets Unity ships — never diff/merge as text
+*.fbx     binary
+*.png     binary
+*.jpg     binary
+*.tga     binary
+*.wav     binary
+*.onnx    binary
+*.bin     binary
+*.pdf     binary
